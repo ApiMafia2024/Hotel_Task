@@ -50,8 +50,8 @@ class HotelController extends Controller
             'description' => 'nullable|string',
             'zip_code' => 'nullable|string|max:20',
             'star_rating' => 'nullable|numeric|min:0|max:5',
-            'lat' => 'nullable|numeric',
-            'lng' => 'nullable|numeric',
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
             'room_count' => 'nullable|integer|min:0',
             'phone' => 'nullable|string|max:30',
             'fax' => 'nullable|string|max:30',
@@ -112,5 +112,73 @@ class HotelController extends Controller
 
         $hotel->delete();
         return response()->json(['message' => 'Hotel deleted']);
+    }
+
+    public function bulkUpdate(Request $request)
+    {
+        $ids = json_decode($request->input('bulk_ids'), true);
+        if (!is_array($ids) || empty($ids)) {
+            return response()->json(['message' => 'No hotels selected.'], 422);
+        }
+
+        $rules = [
+            'display_name' => 'nullable|string|max:255',
+            'city_name' => 'nullable|string|max:255',
+            'country_name' => 'nullable|string|max:255',
+            'priority' => 'nullable|integer|min:0',
+        ];
+
+        $validator = Validator::make($request->all(), $rules);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $data = array_filter($validator->validated(), fn($v) => !is_null($v));
+
+        if (empty($data)) {
+            return response()->json(['message' => 'No fields to update.'], 422);
+        }
+
+        try {
+            Hotel::whereIn('id', $ids)->update($data);
+            return response()->json(['message' => 'Hotels updated successfully.']);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Server Error',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $ids = $request->input('ids', []);
+        if (!is_array($ids) || empty($ids)) {
+            return response()->json(['message' => 'No hotels selected for deletion.'], 422);
+        }
+
+        try {
+            $hotels = Hotel::whereIn('id', $ids)->get();
+
+            foreach ($hotels as $hotel) {
+                if ($hotel->images) {
+                    $paths = json_decode($hotel->images, true);
+                    if (is_array($paths)) {
+                        foreach ($paths as $path) {
+                            Storage::disk('public')->delete($path);
+                        }
+                    }
+                }
+                $hotel->delete();
+            }
+
+            return response()->json(['message' => 'Selected hotels deleted successfully.']);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Server error',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
     }
 }

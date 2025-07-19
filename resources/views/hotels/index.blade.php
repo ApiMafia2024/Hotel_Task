@@ -4,10 +4,14 @@
     <div class="container">
         <h2 class="mb-4">Hotels</h2>
         <button class="btn btn-primary mb-3" id="createHotelBtn">+ Add Hotel</button>
+        <button class="btn btn-warning mb-3" id="bulkEditBtn" disabled>Bulk Edit</button>
+        <button class="btn btn-danger mb-3" id="bulkDeleteBtn" disabled>Bulk Delete</button>
+
 
         <table class="table table-bordered" id="hotelsTable">
             <thead>
                 <tr>
+                    <th><input type="checkbox" id="selectAll"></th>
                     <th>ID</th>
                     <th>Display Name</th>
                     <th>City</th>
@@ -102,18 +106,19 @@
                 tableBody.empty();
                 res.data.forEach(h => {
                     tableBody.append(`
-                        <tr>
-                            <td>${h.id}</td>
-                            <td>${h.display_name}</td>
-                            <td>${h.city_name || ''}</td>
-                            <td>${h.country_name || ''}</td>
-                            <td>${h.star_rating || ''}</td>
-                            <td>
-                                <button class="btn btn-sm btn-info editBtn" data-id="${h.id}">Edit</button>
-                                <button class="btn btn-sm btn-danger deleteBtn" data-id="${h.id}">Delete</button>
-                            </td>
-                        </tr>
-                    `);
+                                            <tr>
+                                                <td><input type="checkbox" class="hotelCheckbox" value="${h.id}"></td>
+                                                <td>${h.id}</td>
+                                                <td>${h.display_name}</td>
+                                                <td>${h.city_name || ''}</td>
+                                                <td>${h.country_name || ''}</td>
+                                                <td>${h.star_rating || ''}</td>
+                                                <td>
+                                                    <button class="btn btn-sm btn-info editBtn" data-id="${h.id}">Edit</button>
+                                                    <button class="btn btn-sm btn-danger deleteBtn" data-id="${h.id}">Delete</button>
+                                                </td>
+                                            </tr>
+                                        `);
                 });
                 pagination.html(res.links);
             });
@@ -130,18 +135,48 @@
         $('#createHotelBtn').click(() => {
             $('#hotelForm')[0].reset();
             $('#hotel_id').val('');
+            $('#hotelForm').removeData('bulk');
             $('.text-danger').text('');
             $('#formErrors').addClass('d-none').text('');
+            $('#hotelForm .col-md-6').show();
+            modal.show();
+        });
+
+        $('#bulkEditBtn').click(() => {
+            const selected = $('.hotelCheckbox:checked');
+            if (selected.length === 0) return;
+
+            $('#hotelForm')[0].reset();
+            $('#hotel_id').val('');
+            $('#hotelForm').data('bulk', true);
+            $('.text-danger').text('');
+            $('#formErrors').addClass('d-none').text('');
+
+            // Only show specific fields
+            $('#hotelForm .col-md-6').hide();
+            ['#display_name', '#city_name', '#country_name', '#priority'].forEach(id => {
+                $(id).closest('.col-md-6').show();
+            });
+
             modal.show();
         });
 
         $('#hotelForm').submit(function (e) {
             e.preventDefault();
-            const id = $('#hotel_id').val();
-            const url = id ? `/hotels/${id}` : '/hotels';
-            const formData = new FormData(this);
 
-            if (id) formData.append('_method', 'PUT');
+            const isBulk = $(this).data('bulk') === true;
+            const formData = new FormData(this);
+            const id = $('#hotel_id').val();
+            let url = '/hotels';
+
+            if (isBulk) {
+                const selectedIds = $('.hotelCheckbox:checked').map((_, el) => $(el).val()).get();
+                formData.append('bulk_ids', JSON.stringify(selectedIds));
+                url = '/hotels/bulk-update';
+            } else if (id) {
+                url = `/hotels/${id}`;
+                formData.append('_method', 'PUT');
+            }
 
             $.ajax({
                 url,
@@ -156,14 +191,10 @@
                 error: xhr => {
                     $('.text-danger').text('');
                     $('#formErrors').addClass('d-none').text('');
-
                     if (xhr.status === 422) {
-                        const errors = xhr.responseJSON.errors;
-                        showErrors(errors);
-                    } else if (xhr.status === 500 && xhr.responseJSON?.error_detail) {
-                        $('#formErrors').removeClass('d-none').text('Server Error: ' + xhr.responseJSON.error_detail);
+                        showErrors(xhr.responseJSON.errors);
                     } else {
-                        $('#formErrors').removeClass('d-none').text('Something went wrong. Please try again.');
+                        $('#formErrors').removeClass('d-none').text('Error: ' + (xhr.responseJSON?.message || 'Unexpected error'));
                     }
                 }
             });
@@ -173,10 +204,12 @@
             const id = $(this).data('id');
 
             $.get(`/hotels/${id}`, function (data) {
-
                 $('#hotelForm')[0].reset();
                 $('#hotel_id').val(data.id);
+                $('#hotelForm').removeData('bulk');
                 $('.text-danger').text('');
+                $('#hotelForm .col-md-6').show();
+
                 Object.entries(data).forEach(([key, val]) => {
                     const field = $('#' + key);
                     if (field.length && field.attr('type') !== 'file') {
@@ -187,6 +220,7 @@
                         }
                     }
                 });
+
                 modal.show();
             });
         });
@@ -218,6 +252,44 @@
             loadHotels(page);
         });
 
+        // Checkbox select all
+        $(document).on('change', '.hotelCheckbox, #selectAll', function () {
+            const checkedCount = $('.hotelCheckbox:checked').length;
+            $('#selectAll').prop('checked', $('.hotelCheckbox').length === checkedCount);
+            $('#bulkEditBtn').prop('disabled', checkedCount === 0);
+            $('#bulkDeleteBtn').prop('disabled', checkedCount === 0);
+        });
+
+
+        $('#selectAll').on('change', function () {
+            $('.hotelCheckbox').prop('checked', this.checked).trigger('change');
+        });
+        $('#bulkDeleteBtn').click(() => {
+            const selected = $('.hotelCheckbox:checked');
+            if (selected.length === 0) return;
+            new bootstrap.Modal(document.getElementById('bulkDeleteModal')).show();
+        });
+
+        $('#confirmBulkDelete').click(() => {
+            const selectedIds = $('.hotelCheckbox:checked').map((_, el) => $(el).val()).get();
+
+            $.ajax({
+                url: '/hotels/bulk-delete',
+                method: 'POST',
+                data: {
+                    _token: '{{ csrf_token() }}',
+                    ids: selectedIds
+                },
+                success: () => {
+                    loadHotels();
+                    bootstrap.Modal.getInstance(document.getElementById('bulkDeleteModal')).hide();
+                },
+                error: xhr => {
+                    alert(xhr.responseJSON?.message || 'Bulk delete failed.');
+                }
+            });
+        });
+
         loadHotels();
     </script>
 
@@ -240,3 +312,22 @@
         </div>
     </div>
 @endpush
+
+<!-- Bulk Delete Confirm Modal -->
+<div class="modal fade" id="bulkDeleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Bulk Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Are you sure you want to delete the selected hotels?
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmBulkDelete">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
